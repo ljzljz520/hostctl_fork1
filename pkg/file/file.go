@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/spf13/afero"
@@ -159,62 +159,54 @@ func (f *File) RemoveHostnames(name string, routes []string) (bool, error) {
 	return false, nil
 }
 
-// WriteTo overwrite file with hosts info.
-func (f *File) WriteTo(src string) error {
-	h, err := f.fs.OpenFile(src, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644) //nolint: gomnd
-	if err != nil {
-		return err
-	}
-
-	return f.writeToFile(h)
-}
-
-// Flush overwrite file with hosts info.
-func (f *File) Flush() error {
-	h, err := f.fs.OpenFile(f.src.Name(), os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644) //nolint: gomnd
-	if err != nil {
-		return err
-	}
-	defer h.Close()
-
-	return f.writeToFile(h)
-}
-
-// writeToFile overwrite file with hosts info.
-func (f *File) writeToFile(dst afero.File) error {
+// WriteTo publishes the hosts content to a different file. The destination is
+// replaced atomically: content is fully generated and validated before
+// anything is published, so a failure can never leave a truncated file.
+func (f *File) WriteTo(dst string) error {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 
-	if f.data == nil {
-		return types.ErrNoContent
-	}
-
-	err := dst.Truncate(0)
+	content, err := f.render()
 	if err != nil {
 		return err
 	}
 
-	err = f.data.DefaultProfile.Render(dst)
-	if err != nil {
+	if err := validateGenerated(f.data, content); err != nil {
 		return err
 	}
 
-	f.writeBanner(dst)
+	name := f.src.Name()
 
-	for _, name := range f.data.ProfileNames {
-		if name == types.Default {
-			continue
-		}
+	if err := f.publish(dst, content); err != nil {
+		return err
+	}
 
-		p := f.data.Profiles[name]
-
-		err := p.Render(dst)
-		if err != nil {
-			return err
-		}
+	if filepath.Clean(dst) == filepath.Clean(name) {
+		return f.reopenSource()
 	}
 
 	return nil
+}
+
+// Flush atomically publishes the hosts content back to its source file.
+func (f *File) Flush() error {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+
+	content, err := f.render()
+	if err != nil {
+		return err
+	}
+
+	if err := validateGenerated(f.data, content); err != nil {
+		return err
+	}
+
+	if err := f.publish(f.src.Name(), content); err != nil {
+		return err
+	}
+
+	return f.reopenSource()
 }
 
 func (f *File) writeBanner(w io.StringWriter) {

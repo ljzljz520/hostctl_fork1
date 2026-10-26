@@ -222,20 +222,18 @@ func TestManagerRoutes(t *testing.T) {
 }
 
 func TestManagerWrite(t *testing.T) {
-	t.Run("writeToFile", func(t *testing.T) {
+	t.Run("render", func(t *testing.T) {
 		mem := createBasicFS(t)
 
 		f, err := NewWithFs("/tmp/etc/hosts", mem)
 		assert.NoError(t, err)
 
-		h, _ := mem.OpenFile("/tmp/etc/hosts", os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644)
-		err = f.writeToFile(h)
+		content, err := f.render()
 		assert.NoError(t, err)
-		f.Close()
+		assert.NoError(t, validateGenerated(f.data, content))
+		assert.Contains(t, string(content), fullHostfile)
 
-		c, err := afero.ReadFile(mem, h.Name())
-		assert.NoError(t, err)
-		assert.Contains(t, string(c), fullHostfile)
+		f.Close()
 	})
 
 	t.Run("WriteTo", func(t *testing.T) {
